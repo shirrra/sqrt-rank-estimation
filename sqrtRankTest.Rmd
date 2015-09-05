@@ -1,0 +1,213 @@
+---
+title: "Rank Detection With Unknown Noise Distribution"
+author: "Shira Kritchman"
+date: "Sunday, July 12, 2015"
+output: pdf_document
+---
+
+Detection of the number of signals embedded in noise
+is a fundamental problem in signal and array processing.
+In this work we consider the case where the noise covariance matrix is arbitrary and unknown and we are only given signal bearing samples.
+The algorithm is based on results by Dozier and Silverstein, 
+showing that under certain conditions, 
+the asymptotic distribution of the sample covariance matrix eigenvalues, denoted $f(x)$, behaves like $\sqrt{M-x}$ in the vicinity of $M$, where $M$ is the right edge of the support of $f$.
+
+Notation:
+* $p$ observations dimention (number of censors etc.)
+* $n$ number of samples
+* $X$ is $n\times p$ matrix of samples
+* $S=\frac1nX^HX$ sample covariance matrix
+* $\ell$ eigenvalues of $S$, listed in descending order
+* $k$ true rank
+* $N$ size of neighborhood to fit to the sqare root law
+* $\lambda_1,\dots,\lambda_k$ signa eigenvalues
+
+The basic algorithm is given $p$ and $n$ and the vector $\ell$. For each possibble value $q$ of the unknown true rank $k$,
+it tries to fit a square root law to the distribution of the eigenvalues in a vicinity of $\ell_{q+1}$. 
+Since we don't know the neither the true asymptotic distribution $f$ or the finite distribution $f_n$, we use the empirical CDF.
+Note that if $f(x)\approx c_1\sqrt{M-x}$ then the CDF is 
+$F(x)\approx 1-c_2(M-x)^{1.5}$.
+So for a given $q$ we try to fit $1-c_2(M-x)^{1.5}$ to $\ell_{q+1},\dots,\ell_{q+N}$, where the value of $N$ will be discussed later.
+Since the $p$ eigenvalues of $S$ are listed in descending order, the empirical CDF of $\ell_i$ is $(p-i+1)/p$. So we want to find $x_2$ and $M$ such that $i/p=1-c_2(M-\ell_i)^1.5$ for $i=q+1,\dots,q+R$.
+Denote $y_i=(1-i/p)^{2/3}$, then we have $c_3-c_2\ell_i=y_i$.
+Therefore we look for a linear fit of $ell_i$ with $y_i$.
+For each possible value $q$ of $k$ we compute the MSE of the best linear fit. Here is the function computing this value:
+
+```{r}
+sqrtFitMSE <- function(q, ell, N, applyWeights=FALSE) {
+        p <- length(ell)
+        x <- ell[(q+1):(q+N)]
+        u <- ((p-q):(p-q-N+1))/(p-q)
+        y <- (1-u)^(2/3)
+#         if (applyWeights==FALSE) {
+#                 w <- NULL
+#                 } else {
+#                         w <- 1/(1+y)
+#                         w <- (length(x):1)^2
+#                         } 
+        fit <- lm(y~x)
+        return(mean(fit$residuals^2))
+        }
+```
+
+For example take Gaussian white noise with $\sigma^2=1$, take
+$p=1000$, $n=2000$, and take $k=2$ with $\lambda=(100,50)$.
+Then we expect to see the sqrt fit MSE at a minimum for $q=2$.
+Here is a plot of $sqrtFitMSE$ for simulated data and with different values for $N$:
+
+```{r, echo=FALSE, cache=T}
+library(ggplot2)
+p <- 1000
+n <- 2000
+lam <- c(100,50)
+k <- length(lam)
+Sigma = diag(c(lam, rep(0,p-k))+rep(1,p))
+S <- rWishart(1,n,Sigma)
+S <- S[,,1]/n
+ell <- eigen(S,TRUE,TRUE)$values
+max_k <- 10
+N <- c(10, 30, 70, 50, 100, 200)
+MSE <- data.frame(N=rep(N,each=max_k+1),q=rep(0:max_k, length(N)))
+MSE$mse <- apply(MSE, 1, function(row) sqrtFitMSE(row[2], ell, row[1], applyWeights=FALSE))
+qplot(q, log(mse), data=MSE, facets=.~N)        
+```
+
+On the one hand, in this simple scenario, we get a clear separation of the MSE between $q\ge k$ and $q<k$.
+On the other hand, the minimal MSE is not promised to be at $q=k$, so we are not sure how to set the predictor $\hat{k}$.
+
+Now we do the same experiment, only with different noise. Noise covariance matrix eigenvalues are now $\sim U[0.5,1.5]$. This is how the MSE behaves for different values of $N$:
+
+```{r, echo=FALSE, cache=T}
+noise_lam <- runif(p,0.5,1.5)
+Sigma = diag(c(lam, rep(0,p-k)) + noise_lam)
+S <- rWishart(1,n,Sigma)
+S <- S[,,1]/n
+ell <- eigen(S,TRUE,TRUE)$values
+max_k <- 10
+N <- c(10, 30, 70, 50, 100, 200)
+MSE <- data.frame(N=rep(N,each=max_k+1), q=rep(0:max_k, length(N)))
+MSE$mse <- apply(MSE, 1, function(row) sqrtFitMSE(row[2], ell, row[1], applyWeights=FALSE))
+qplot(q, log(mse), data=MSE, facets=.~N)        
+```
+
+We now try to estimate $k$ by taking $q$ with the lowest MSE.
+
+```{r}
+sqrtFit <- function(max_k, ell, N) {
+        mse <- rep(0, max_k+1)
+        for (q in 0:max_k) {
+                mse[q+1] <- sqrtFitMSE(q, ell, N, applyWeights=FALSE)
+                }
+        return(which.min(mse)-1)
+        }
+```
+
+```{r}
+iter <- 50
+```
+We apply this estimator with different values of $p$, with $n=2*p$.
+For $N$ we use $\sqrt{p}$.
+For each value of $p$ we make `r iter` iterations.
+We show the probability of getting $k$ right for each value of $p$.
+
+```{r, echo=F, cache=T}
+P <- 2^c(6, 7, 8, 9, 10)
+lam <- c(100,50)
+k <- length(lam)
+max_k <- 10
+
+DF <- data.frame(P=P, n=2*P, N=sqrt(P))
+DF$probRight <- apply(DF, 1, function(row) {
+        p <- row[["P"]]
+        n <- row[["n"]]
+        N <- row[["N"]]
+        count <- 0;
+        for (i in 1:iter) {
+                noise_lam <- runif(p, 0.5, 1.5)
+                Sigma <- diag(c(lam, rep(0,p-k)) + noise_lam);
+                S <- rWishart(1, n, Sigma);
+                S <- S[,,1]/n;
+                ell <- as.numeric(eigen(S,TRUE,TRUE)$values)
+                count <- count + (sqrtFit(max_k, ell, N)==k)
+                count <- count + (sqrtFit(max_k, ell, N)==k)
+                }
+        return(count / iter)
+        })
+qplot(log(P, 2), probRight, data=DF)    
+```
+
+```{r}
+p <- 512
+n <- 2*p
+N <- sqrt(p)
+lam <- c(100)
+k <- length(lam)
+iter <- 
+k_est <- 3
+for (k_est in 1:5) {
+alpha <- 0.08
+elem <- 5
+a <- Fhat(l[k_est+1],l,k_est)
+b <- l[k_est+1]
+x2<- l[(k_est+1):(k_est+elem)]
+z <- (b-x2)^1.5
+y <- sapply(x2,Fhat,l=l,k=k_est)
+alpha <- (a-y)%*%z/(z%*%z)
+plot(x2,sapply(x2,Fhat,l=l,k=k_est),col="blue")
+lines(x2,a-alpha*(b-x2)^1.5,col="red")
+mse[k_Est] <- (a-alpha*z-y)%*%(a-alpha*z-y)
+}
+k_est <- 3
+for (k_est in 1:5) {
+alpha <- 0.08
+elem <- 5
+a <- Fhat(l[k_est+1],l,k_est)
+b <- l[k_est+1]
+x2<- l[(k_est+1):(k_est+elem)]
+z <- (b-x2)^1.5
+y <- sapply(x2,Fhat,l=l,k=k_est)
+alpha <- (a-y)%*%z/(z%*%z)
+plot(x2,sapply(x2,Fhat,l=l,k=k_est),col="blue")
+lines(x2,a-alpha*(b-x2)^1.5,col="red")
+mse[k_Est] <- (a-alpha*z-y)%*%(a-alpha*z-y)
+}
+k_est <- 3
+for (k_est in 1:5) {
+alpha <- 0.08
+elem <- 5
+a <- Fhat(l[k_est+1],l,k_est)
+b <- l[k_est+1]
+x2<- l[(k_est+1):(k_est+elem)]
+z <- (b-x2)^1.5
+y <- sapply(x2,Fhat,l=l,k=k_est)
+alpha <- (a-y)%*%z/(z%*%z)
+plot(x2,sapply(x2,Fhat,l=l,k=k_est),col="blue")
+lines(x2,a-alpha*(b-x2)^1.5,col="red")
+mse[k_Est] <- (a-alpha*z-y)%*%(a-alpha*z-y)
+}
+k_est <- 3
+for (k_est in 1:5) {
+alpha <- 0.08
+elem <- 5
+a <- Fhat(l[k_est+1],l,k_est)
+b <- l[k_est+1]
+x2<- l[(k_est+1):(k_est+elem)]
+z <- (b-x2)^1.5
+y <- sapply(x2,Fhat,l=l,k=k_est)
+alpha <- (a-y)%*%z/(z%*%z)
+plot(x2,sapply(x2,Fhat,l=l,k=k_est),col="blue")
+lines(x2,a-alpha*(b-x2)^1.5,col="red")
+mse[k_Est] <- (a-alpha*z-y)%*%(a-alpha*z-y)
+}
+k_hat <- rep(0,iter)
+for (i in 1:iter) {
+        noise_lam <- runif(p, 0.5, 1.5)
+        Sigma <- diag(c(lam, rep(0,p-k)) + noise_lam);
+        S <- rWishart(1, n, Sigma);
+        S <- S[,,1]/n;
+        ell <- as.numeric(eigen(S,TRUE,TRUE)$values)
+        #count <- count + (sqrtFit(max_k, ell, N)==k)
+        k_hat[i] <- sqrtFit(max_k, ell, N)
+        }
+hist(k_hat, max_k+1)
+```

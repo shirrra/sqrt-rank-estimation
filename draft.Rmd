@@ -1,0 +1,54 @@
+
+The following function returns M_hat instead of the MSE.
+```{r}
+sqrtFitM <- function(q, ell, N, applyWeights=F) {
+        p <- length(ell)
+        x <- ell[(q+1):(q+N)]
+        u <- ((p-q):(p-q-N+1))/(p-q)
+        y <- (1-u)^(2/3)
+        if (applyWeights==F) {
+                weights <- NULL
+        } else {
+                weights <- u  
+        } 
+        fit <- lm(y~x, weights=u)
+        mu <- -fit$coefficients[1] / fit$coefficients[2]
+        return(mu)
+        }
+```
+
+```{r, echo=F}
+MSE$mu <- apply(MSE, 1, function(row) sqrtFitM(row[2],ell, row[1]))
+MSE$muDiff <- (ell[MSE$q+1]-MSE$mu)
+pl <- qplot(q, muDiff, data=MSE[MSE$q>-1,], facets=.~N)
+#pl <- pl + geom_abline(slope=0, intercept=ell[k], color="red")
+#print(pl)
+```
+
+```{r}
+sqrtFitMDiff <- function(q, ell, N, applyWeights=F) {
+        p <- length(ell)
+        x <- ell[(q+1):(q+N)]
+        u <- ((p-q):(p-q-N+1))/(p-q)
+        y <- (1-u)^(2/3)
+        if (applyWeights==F) {
+                weights <- NULL
+        } else {
+                weights <- u  
+        } 
+        fit <- lm(y~x, weights=u)
+        mu <- -fit$coefficients[1] / fit$coefficients[2]
+        muDiff <- ell[q+1]-mu
+        return(muDiff)
+        }
+```
+
+```{r, echo=F}
+MSE$mu <- apply(MSE, 1, function(row) sqrtFitM(row[2],ell, row[1]))
+MSE$muDiff <- (ell[MSE$q+1]-MSE$mu)
+k_hat <- lapply(N, function(n) which.min(MSE$muDiff[MSE$N==n]))
+#plot(N, k_hat)
+pl <- qplot(q, muDiff, data=MSE[MSE$q>-1,], facets=.~N)
+#pl <- pl + geom_abline(slope=0, intercept=ell[k], color="red")
+#print(pl)
+```
